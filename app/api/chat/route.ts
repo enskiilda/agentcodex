@@ -670,7 +670,9 @@ SCREEN: ${width}×${height} pixels | Aspect ratio: 4:3 | Origin: (0,0) at TOP-LE
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      Connection: "keep-alive",
     },
   });
 }
