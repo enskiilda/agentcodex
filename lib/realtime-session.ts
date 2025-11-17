@@ -120,6 +120,7 @@ export class RealtimeSession {
         },
         body: JSON.stringify(payload),
         signal: abortController.signal,
+        cache: "no-store",
       });
 
       if (!response.ok) {
@@ -134,25 +135,23 @@ export class RealtimeSession {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
+      let remainder = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          if (buffer.trim()) {
-            this.processLine(buffer);
+          if (remainder.trim()) {
+            this.processLine(remainder);
           }
           break;
         }
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        const parts = (remainder + chunk).split("\n");
+        remainder = parts.pop() ?? "";
 
-        let newlineIndex = buffer.indexOf("\n");
-        while (newlineIndex !== -1) {
-          const line = buffer.slice(0, newlineIndex);
-          buffer = buffer.slice(newlineIndex + 1);
-          this.processLine(line);
-          newlineIndex = buffer.indexOf("\n");
+        for (const part of parts) {
+          this.processLine(part);
         }
       }
 
