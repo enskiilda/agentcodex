@@ -46,10 +46,11 @@ export class RealtimeSession {
   private readonly api: string;
   private readonly baseBody?: Record<string, any>;
   private readonly onError?: (error: Error) => void;
-  private abortController: AbortController | null = null;
   private currentTextId: string | null = null;
   private readonly toolMessageMap = new Map<string, string>();
   private activeScreenshotToolId: string | null = null;
+  private socket: WebSocket | null = null;
+  private socketReady: Promise<void> | null = null;
 
   constructor(options: RealtimeSessionOptions) {
     this.api = options.api;
@@ -78,6 +79,49 @@ export class RealtimeSession {
     this.updateSnapshot({ streamUrl, sandboxId });
   }
 
+  private ensureSocket() {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      return this.socketReady ?? Promise.resolve();
+    }
+
+    this.socket?.close();
+
+    this.socketReady = new Promise<void>((resolve, reject) => {
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const socket = new WebSocket(`${protocol}://${window.location.host}${this.api}`);
+      this.socket = socket;
+
+      socket.addEventListener("open", () => {
+        resolve();
+      });
+
+      socket.addEventListener("message", (event) => {
+        try {
+          const data = JSON.parse(event.data as string);
+          this.processEvent(data as StreamEvent);
+        } catch (error) {
+          console.error("[WS PARSE ERROR]", error);
+        }
+      });
+
+      socket.addEventListener("error", (err) => {
+        console.error("[WS ERROR]", err);
+        if (this.onError) {
+          this.onError(err instanceof Error ? err : new Error(String(err)));
+        }
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+
+      socket.addEventListener("close", () => {
+        this.socket = null;
+        this.socketReady = null;
+        this.updateSnapshot({ status: "ready" });
+      });
+    });
+
+    return this.socketReady;
+  }
+
   async sendMessage(text: string, options?: SendOptions) {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -101,10 +145,6 @@ export class RealtimeSession {
       status: "submitted",
     });
 
-    this.abortController?.abort();
-    const abortController = new AbortController();
-    this.abortController = abortController;
-
     try {
       const payload = {
         messages: newMessages,
@@ -113,84 +153,31 @@ export class RealtimeSession {
         ...(this.baseBody ?? {}),
       };
 
-      const response = await fetch(`${this.api}?_=${Date.now()}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      if (!response.body) {
-        throw new Error("No response body");
-      }
-
+      await this.ensureSocket();
+      this.socket?.send(JSON.stringify({
+        type: "chat",
+        ...payload,
+      }));
       this.updateSnapshot({ status: "streaming" });
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          if (buffer.trim()) {
-            this.processLine(buffer);
-          }
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-
-        let newlineIndex = buffer.indexOf("\n");
-        while (newlineIndex !== -1) {
-          const line = buffer.slice(0, newlineIndex);
-          buffer = buffer.slice(newlineIndex + 1);
-          this.processLine(line);
-          newlineIndex = buffer.indexOf("\n");
-        }
-      }
-
-      this.abortController = null;
-      this.updateSnapshot({ status: "ready" });
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        console.log("[STREAMING] Aborted");
-      } else {
-        console.error("[STREAMING ERROR]", error);
-        if (this.onError) {
-          this.onError(error instanceof Error ? error : new Error(String(error)));
-        }
+      console.error("[STREAMING ERROR]", error);
+      if (this.onError) {
+        this.onError(error instanceof Error ? error : new Error(String(error)));
       }
       this.updateSnapshot({ status: "ready" });
     }
   }
 
   stop() {
-    if (this.abortController) {
-      this.abortController.abort();
-      this.abortController = null;
+    if (this.socket) {
+      this.socket.close();
+      this.socket = null;
+      this.socketReady = null;
     }
     this.updateSnapshot({ status: "ready" });
   }
 
-  private processLine(rawLine: string) {
-    const line = rawLine.trim();
-    if (!line) return;
-
-    let event: StreamEvent;
-    try {
-      event = JSON.parse(line) as StreamEvent;
-    } catch (err) {
-      console.error("[PARSE ERROR]", err);
-      return;
-    }
-
+  private processEvent(event: StreamEvent) {
     switch (event.type) {
       case "text-delta": {
         const delta = typeof event.delta === "string" ? event.delta : event.textDelta ?? "";
