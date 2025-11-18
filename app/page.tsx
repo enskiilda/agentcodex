@@ -18,6 +18,7 @@ import { RealtimeSession } from "@/lib/realtime-session";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
 export default function Chat() {
   const [desktopContainerRef, desktopEndRef] = useScrollToBottom();
@@ -27,7 +28,7 @@ export default function Chat() {
 
   if (!sessionRef.current) {
     sessionRef.current = new RealtimeSession({
-      api: "/api/chat",
+      api: "/api/chat-ws",
       onError: (error) => {
         console.error(error);
         toast.error("There was an error", {

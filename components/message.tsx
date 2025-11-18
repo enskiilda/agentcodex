@@ -258,6 +258,8 @@ function ComputerInvocation({
             alt="Screenshot"
             className="w-full object-contain"
             onLoad={handleImageLoad}
+            loading="eager"
+            decoding="sync"
           />
         </div>
       ) : null}
